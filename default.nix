@@ -4,6 +4,17 @@
 # From the current directory: nix-env -if .
 # 
 # There is also an overlay in nix/overlay.nix, a simple package in nix/package.nix and a nix shell in shell.nix.
-{ nixpkgs ? <nixpkgs> }:
-let pkgs = import nixpkgs { overlays = [ (import nix/overlay.nix) ]; };
-in pkgs.hive
+#
+# Note that this uses https://github.com/edolstra/flake-compat to pass emulate Nix flakes, even on Nix releases without flake support.
+(import
+  (
+    let lock = builtins.fromJSON (builtins.readFile ./flake.lock);
+    in
+    fetchTarball {
+      url =
+        "https://github.com/edolstra/flake-compat/archive/${lock.nodes.flake-compat.locked.rev}.tar.gz";
+      sha256 = lock.nodes.flake-compat.locked.narHash;
+    }
+  )
+  { src = ./.; }
+).defaultNix

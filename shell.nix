@@ -1,12 +1,12 @@
-{ nixpkgs ? <nixpkgs>, pkgs ? import nixpkgs { } }:
-let pkgs = import nixpkgs { };
-in pkgs.mkShell {
-  name = "nix-hive-shell";
-  buildInputs = with pkgs; [ go nixfmt nix ];
-  shellHook = ''
-    # We inject <hive> into your path to support local development.
-    export NIX_PATH="hive=./nix/hive:$NIX_PATH"
-  '';
-  # TODO: add chore for:
-  #   nixfmt -w 120 *.nix (find example nix -name '*.nix')
-}
+(import
+  (
+    let
+      lock = builtins.fromJSON (builtins.readFile ./flake.lock);
+    in
+    fetchTarball {
+      url = "https://github.com/edolstra/flake-compat/archive/${lock.nodes.flake-compat.locked.rev}.tar.gz";
+      sha256 = lock.nodes.flake-compat.locked.narHash;
+    }
+  )
+  { src = ./.; }
+).shellNix
