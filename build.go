@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -65,57 +66,86 @@ func (inv *Inventory) build(ctx context.Context, systems ...string) error {
 
 // equivalent to build that does not realise generated derivations
 func (inv *Inventory) instantiate(ctx context.Context, systems ...string) error {
-	for _, system := range systems {
-		err := inv.Systems[system].instantiate(ctx, system)
+	systemNamesByPath := make(map[string][]string)
+	for _, systemName := range systems {
+		if inv.Systems[systemName].Result != `` {
+			continue
+		}
+
+		pathsStr := strings.Join(inv.systemPaths(systemName), "\x00")
+		systemNamesByPath[pathsStr] = append(systemNamesByPath[pathsStr], systemName)
+	}
+
+	for pathsStr, systemList := range systemNamesByPath {
+		args := make([]string, 0, 64)
+		paths := strings.Split(pathsStr, "\x00")
+		systemListJson, err := json.Marshal(systemList)
 		if err != nil {
-			return fmt.Errorf(`%w while building %q`, err, system)
+			return err
+		}
+		args = append(args, `--include`, `deployment=`+deploymentPath)
+		for _, path := range paths {
+			args = append(args, `--include`, path)
+		}
+		args = append(args, `--argstr`, `hiveSystemListJson`, string(systemListJson))
+		args = append(args, `--expr`, `{hiveSystemListJson}: let hiveExpr = import <hive/build.nix>; targets = builtins.fromJSON hiveSystemListJson; in map (name: hiveExpr { inherit name; }) targets`)
+		derivationFilenameListBytes, err := eval(ctx, `nix-instantiate`, args...)
+		if err != nil {
+			return err
+		}
+		derivationFilenames := strings.Split(string(bytes.Trim(derivationFilenameListBytes, "\n")), "\n")
+		if len(derivationFilenames) != len(systemList) {
+			return fmt.Errorf(
+				`attempting to process a batch of %d systems (%#v), but %d results were returned: %#v`,
+				len(systemList), systemList,
+				len(derivationFilenames), derivationFilenames,
+			)
+		}
+
+		// generate a map from derivation filenames back to system names
+		systemNameByDrv := make(map[string]string, len(systemList))
+		for n := range derivationFilenames {
+			systemNameByDrv[derivationFilenames[n]] = systemList[n]
+		}
+
+		showDerivationArgs := make([]string, 0, len(derivationFilenames)+1)
+		showDerivationArgs = append(showDerivationArgs, `show-derivation`)
+		showDerivationArgs = append(showDerivationArgs, derivationFilenames...)
+		derivationJson, err := eval(ctx, `nix`, showDerivationArgs...)
+		if err != nil {
+			return err
+		}
+
+		resultDerivation := make(map[string]struct {
+			Outputs struct {
+				Out struct {
+					Path string `json:"path"`
+				} `json:"out"`
+			} `json:"outputs"`
+		})
+
+		if err := json.Unmarshal(derivationJson, &resultDerivation); err != nil {
+			return err
+		}
+
+		if len(resultDerivation) != len(derivationFilenames) {
+			return fmt.Errorf(`asked Nix to parse %d derivations, but received %d results`, len(derivationFilenames), len(resultDerivation))
+		}
+		for drvPath, drvStruct := range resultDerivation {
+			systemName, ok := systemNameByDrv[drvPath]
+			if !ok {
+				return fmt.Errorf(`received information on unexpected derivation %+v`, drvPath)
+			}
+			cfg, ok := inv.Systems[systemName]
+			if !ok {
+				return fmt.Errorf(`cannot find system %+v in inventory`, systemName)
+			}
+			cfg.ResultDrv = drvPath
+			cfg.Result = drvStruct.Outputs.Out.Path
 		}
 	}
+
 	return nil
-}
-
-// instantiate creates a .drv in the local store, but for compatibility with build returns the $out path
-func (cfg *System) instantiate(ctx context.Context, system string) error {
-	if cfg.Result != `` {
-		return nil // already built.
-	}
-	args := make([]string, 0, 64)
-	inform(ctx, `instantiating %q`, system)
-
-	args = append(args, `--include`, `deployment=`+deploymentPath)
-	paths := inv.systemPaths(system)
-	for _, path := range paths {
-		args = append(args, `--include`, path)
-	}
-	args = append(args, `--argstr`, `name`, system)
-	args = append(args, `--expr`, `(import <hive/build.nix>)`)
-	derivationFilename, err := eval(ctx, `nix-instantiate`, args...)
-	if err != nil {
-		return err
-	}
-	cfg.ResultDrv = strings.TrimRight(string(derivationFilename), "\n")
-	derivationJson, err := eval(ctx, `nix`, `show-derivation`, cfg.ResultDrv)
-	if err != nil {
-		return err
-	}
-	resultDerivation := make(map[string]struct {
-		Outputs struct {
-			Out struct {
-				Path string `json:"path"`
-			} `json:"out"`
-		} `json:"outputs"`
-	})
-	if err := json.Unmarshal(derivationJson, &resultDerivation); err != nil {
-		return err
-	}
-	if len(resultDerivation) != 1 {
-		return fmt.Errorf("Result of parsing %v does not have exactly one derivation", cfg.ResultDrv)
-	}
-	for _, drv := range resultDerivation {
-		cfg.Result = drv.Outputs.Out.Path
-		return err
-	}
-	panic("unreachable")
 }
 
 func (cfg *System) build(ctx context.Context, system string) error {
