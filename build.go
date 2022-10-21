@@ -108,10 +108,7 @@ func (inv *Inventory) instantiate(ctx context.Context, systems ...string) error 
 			systemNameByDrv[derivationFilenames[n]] = systemList[n]
 		}
 
-		showDerivationArgs := make([]string, 0, len(derivationFilenames)+1)
-		showDerivationArgs = append(showDerivationArgs, `show-derivation`)
-		showDerivationArgs = append(showDerivationArgs, derivationFilenames...)
-		derivationJson, err := eval(ctx, `nix`, showDerivationArgs...)
+		derivationJson, err := eval(ctx, `nix`, append([]string{`show-derivation`}, derivationFilenames...)...)
 		if err != nil {
 			return err
 		}
