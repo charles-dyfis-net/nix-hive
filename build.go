@@ -69,7 +69,7 @@ func (inv *Inventory) instantiate(ctx context.Context, systems ...string) error 
 	systemNamesByPath := make(map[string][]string)
 	for _, systemName := range systems {
 		if inv.Systems[systemName].Result != `` {
-			continue
+			continue // already built
 		}
 
 		pathsStr := strings.Join(inv.systemPaths(systemName), "\x00")
@@ -108,10 +108,7 @@ func (inv *Inventory) instantiate(ctx context.Context, systems ...string) error 
 			systemNameByDrv[derivationFilenames[n]] = systemList[n]
 		}
 
-		showDerivationArgs := make([]string, 0, len(derivationFilenames)+1)
-		showDerivationArgs = append(showDerivationArgs, `show-derivation`)
-		showDerivationArgs = append(showDerivationArgs, derivationFilenames...)
-		derivationJson, err := eval(ctx, `nix`, showDerivationArgs...)
+		derivationJson, err := eval(ctx, `nix`, append([]string{`show-derivation`}, derivationFilenames...)...)
 		if err != nil {
 			return err
 		}
